@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Побег из лабиринта — с джойстиком</title>
+<style>
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#071028;color:#e6e7ef;display:flex;align-items:center;justify-content:center;height:100vh}
+  .wrap{width:960px;max-width:96%;display:grid;gap:12px}
+  header{display:flex;justify-content:space-between;align-items:center}
+  canvas{width:100%;height:auto;background:#071028;border-radius:10px;display:block}
+  .controls{display:flex;gap:8px}
+  .panel{display:flex;gap:8px;align-items:center;color:#9aa0b4}
+  .joystick{position:relative;margin-top:8px}
+  .joybtn{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,0.06);display:inline-flex;align-items:center;justify-content:center;margin:6px;font-size:20px;color:#cfe7ff;touch-action:none;user-select:none}
+  .bottom-row{display:flex;gap:8px;align-items:center}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header><h1>Побег из лабиринта</h1>
+      <div class="controls">
+        <button id="btnNew">↻ Новый</button>
+        <select id="difficulty"><option value="small">Мал</option><option value="medium" selected>Средний</option><option value="large">Большой</option></select>
+      </div>
+    </header>
+
+    <canvas id="maze" width="700" height="700"></canvas>
+
+    <div class="bottom-row">
+      <div class="joystick" id="joystick">
+        <div style="display:flex;justify-content:center"><div class="joybtn" id="joy-up">▲</div></div>
+        <div style="display:flex;gap:8px;justify-content:center"><div class="joybtn" id="joy-left">◀</div><div style="width:20px"></div><div class="joybtn" id="joy-right">▶</div></div>
+        <div style="display:flex;justify-content:center"><div class="joybtn" id="joy-down">▼</div></div>
+      </div>
+      <div style="margin-left:12px;color:#9aa0b4">Управление: стрелки / WASD или джойстик (тач)</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('maze');
+  const ctx = canvas.getContext('2d');
+  const btnNew = document.getElementById('btnNew');
+  const dd = document.getElementById('difficulty');
+  const joyUp = document.getElementById('joy-up');
+  const joyDown = document.getElementById('joy-down');
+  const joyLeft = document.getElementById('joy-left');
+  const joyRight = document.getElementById('joy-right');
+
+  let cols=21, rows=21;
+  function setDifficulty(v){ if(v==='small'){cols=15;rows=15;} else if(v==='large'){cols=31;rows=31;} else {cols=21;rows=21;} }
+
+  function makeGrid(c,r){ const g=[]; for(let y=0;y<r;y++){ const row=[]; for(let x=0;x<c;x++) row.push({x,y,walls:[1,1,1,1],v:false}); g.push(row);} return g; }
+  function neighbors(grid,cell){ const out=[]; const {x,y}=cell; if(y>0) out.push(grid[y-1][x]); if(x<cols-1) out.push(grid[y][x+1]); if(y<rows-1) out.push(grid[y+1][x]); if(x>0) out.push(grid[y][x-1]); return out; }
+  function carve(a,b){ const dx=b.x-a.x, dy=b.y-a.y; if(dx===1){a.walls[1]=0;b.walls[3]=0;} else if(dx===-1){a.walls[3]=0;b.walls[1]=0;} else if(dy===1){a.walls[2]=0;b.walls[0]=0;} else if(dy===-1){a.walls[0]=0;b.walls[2]=0;} }
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]} return a }
+
+  function generateMaze(){
+    const g = makeGrid(cols,rows);
+    const stack=[]; const s=g[0][0]; s.v=true; stack.push(s);
+    while(stack.length){
+      const cur = stack[stack.length-1]; const un = neighbors(g,cur).filter(n=>!n.v);
+      if(un.length){ const nxt = shuffle(un)[0]; carve(cur,nxt); nxt.v=true; stack.push(nxt); } else stack.pop();
+    }
+    return g;
+  }
+
+  function shortestPathLen(grid){
+    const dist = Array.from({length:rows},()=>Array(cols).fill(1e9)); const q=[[0,0]]; dist[0][0]=0;
+    while(q.length){ const [y,x]=q.shift(); const d=dist[y][x]; const c=grid[y][x];
+      if(!c.walls[0] && dist[y-1][x]>d+1){dist[y-1][x]=d+1;q.push([y-1,x]);}
+      if(!c.walls[1] && dist[y][x+1]>d+1){dist[y][x+1]=d+1;q.push([y,x+1]);}
+      if(!c.walls[2] && dist[y+1][x]>d+1){dist[y+1][x]=d+1;q.push([y+1,x]);}
+      if(!c.walls[3] && dist[y][x-1]>d+1){dist[y][x-1]=d+1;q.push([y,x-1]);}
+    }
+    return dist[rows-1][cols-1];
+  }
+
+  // rendering basics
+  let grid, cellSize=20, margin=8;
+  let avatar={x:0,y:0}, steps=0, started=false, finished=false;
+  function fit(){
+    const size = Math.min(canvas.clientWidth, canvas.clientHeight);
+    canvas.width = size*devicePixelRatio; canvas.height = size*devicePixelRatio; canvas.style.width = size+'px'; canvas.style.height = size+'px';
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    const pad=12; const w=size - pad*2; cellSize = Math.floor(w/cols); margin = Math.floor((size - cellSize*cols)/2);
+    drawAll();
+  }
+
+  function drawAll(){
+    ctx.fillStyle='#071028'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.strokeStyle='#1b2256'; ctx.lineWidth=Math.max(2,Math.floor(cellSize*0.08));
+    for(let y=0;y<rows;y++){ for(let x=0;x<cols;x++){ const c=grid[y][x]; const px=margin+x*cellSize, py=margin+y*cellSize;
+      ctx.fillStyle='#071028'; ctx.fillRect(px,py,cellSize,cellSize); ctx.beginPath();
+      if(c.walls[0]){ctx.moveTo(px,py);ctx.lineTo(px+cellSize,py);} if(c.walls[1]){ctx.moveTo(px+cellSize,py);ctx.lineTo(px+cellSize,py+cellSize);} if(c.walls[2]){ctx.moveTo(px,py+cellSize);ctx.lineTo(px+cellSize,py+cellSize);} if(c.walls[3]){ctx.moveTo(px,py);ctx.lineTo(px,py+cellSize);} ctx.stroke();
+    }}
+    // start/goal
+    fillCellBg(0,0,'#3b82f6',0.14); fillInset(0,0,'#3b82f6'); fillCellBg(rows-1,cols-1,'#22c55e',0.14); fillInset(rows-1,cols-1,'#22c55e');
+    // avatar
+    const px = margin + avatar.x*cellSize + cellSize/2, py = margin + avatar.y*cellSize + cellSize/2, r = Math.max(6, Math.floor(cellSize*0.28));
+    ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.ellipse(px,py+r*0.36,r*0.9,r*0.5,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.fillStyle='#f97316'; ctx.arc(px,py,r,0,Math.PI*2); ctx.fill();
+  }
+  function fillCellBg(y,x,color,a){ const px=margin+x*cellSize, py=margin+y*cellSize; ctx.fillStyle=color; ctx.globalAlpha=a; ctx.fillRect(px,py,cellSize,cellSize); ctx.globalAlpha=1; }
+  function fillInset(y,x,color){ const px=margin+x*cellSize+3, py=margin+y*cellSize+3, s=cellSize-6; ctx.fillStyle=color; ctx.globalAlpha=0.18; ctx.fillRect(px,py,s,s); ctx.globalAlpha=1; }
+
+  function reset(){
+    grid = generateMaze(); avatar={x:0,y:0}; steps=0; started=false; finished=false; best = shortestPathLen(grid); fit();
+  }
+  function canMove(dx,dy){ if(finished) return false; const c = grid[avatar.y][avatar.x]; if(dx===0&&dy===-1) return !c.walls[0]; if(dx===1&&dy===0) return !c.walls[1]; if(dx===0&&dy===1) return !c.walls[2]; if(dx===-1&&dy===0) return !c.walls[3]; return false; }
+  function move(dx,dy){ if(!started) started=true; if(canMove(dx,dy)){ avatar.x+=dx; avatar.y+=dy; steps++; drawAll(); if(avatar.x===cols-1&&avatar.y===rows-1){ finished=true; alert('Финиш! Шагов: '+steps); } } }
+
+  // keyboard
+  window.addEventListener('keydown', e=>{
+    const k=e.key.toLowerCase();
+    if(k==='arrowup'||k==='w') move(0,-1);
+    if(k==='arrowright'||k==='d') move(1,0);
+    if(k==='arrowdown'||k==='s') move(0,1);
+    if(k==='arrowleft'||k==='a') move(-1,0);
+  });
+
+  // joystick touch: set interval while pressed
+  const flags = {up:false,down:false,left:false,right:false}; let interval=null;
+  function startLoop(){ if(interval) return; interval=setInterval(()=>{ if(flags.up) move(0,-1); if(flags.right) move(1,0); if(flags.down) move(0,1); if(flags.left) move(-1,0); }, 120); }
+  function stopLoop(){ if(interval){ clearInterval(interval); interval=null; } }
+
+  function attachJoy(btn, name){
+    btn.addEventListener('pointerdown', e=>{ e.preventDefault(); flags[name]=true; startLoop(); }, {passive:false});
+    btn.addEventListener('pointerup', e=>{ e.preventDefault(); flags[name]=false; stopLoop(); }, {passive:false});
+    btn.addEventListener('pointercancel', ()=>{ flags[name]=false; stopLoop(); });
+    btn.addEventListener('pointerleave', ()=>{ flags[name]=false; stopLoop(); });
+  }
+  attachJoy(joyUp,'up'); attachJoy(joyDown,'down'); attachJoy(joyLeft,'left'); attachJoy(joyRight,'right');
+
+  // controls
+  btnNew.addEventListener('click', ()=>reset());
+  dd.addEventListener('change', ()=>{ setDifficulty(dd.value); reset(); });
+  window.addEventListener('resize', fit);
+
+  setDifficulty(dd.value); reset();
+
+})();
+</script>
+</body>
+</html>
